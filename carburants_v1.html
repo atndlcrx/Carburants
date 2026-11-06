@@ -1,0 +1,565 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prix des carburants autour de moi</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<style>
+  html, body { margin: 0; height: 100%; font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+               color: #1d2533; background: #e9edf2; }
+  #carte { position: absolute; left: 380px; right: 0; top: 0; bottom: 0; background: #dfe6ec; }
+  #panneau { position: absolute; left: 0; top: 0; bottom: 0; width: 380px; box-sizing: border-box; overflow-y: auto;
+             background: #fff; box-shadow: 2px 0 8px rgba(0,0,0,.15); padding: 12px 14px 20px; z-index: 1000; }
+  h1 { font-size: 19px; margin: 0 0 8px; }
+  .bloc { margin: 10px 0; }
+  .titre-bloc { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #6a7484; margin-bottom: 4px; }
+  button, select, input { font: inherit; font-size: 15px; }
+  button { background: #eef1f5; border: 1px solid #c9d0da; border-radius: 6px; padding: 6px 10px; margin: 2px 2px 2px 0;
+           cursor: pointer; color: #1d2533; }
+  button.actif { background: #1d2533; color: #fff; border-color: #1d2533; }
+  button:disabled { opacity: .5; cursor: default; }
+  select, input[type=text], input[type=number] { border: 1px solid #c9d0da; border-radius: 6px; padding: 5px 7px; background: #fff; }
+  input[type=text] { width: 200px; }
+  input[type=number] { width: 58px; }
+  #lieu { font-weight: 600; }
+  #resultats-recherche button { display: block; width: 100%; text-align: left; margin: 3px 0; }
+  #etat { font-size: 13px; color: #4a5568; }
+  #etat.erreur { color: #b3261e; }
+  .carte-sugg { border: 1px solid #d7dde5; border-radius: 8px; padding: 8px 10px; margin: 6px 0; cursor: pointer; }
+  .carte-sugg:hover { background: #f5f7fa; }
+  .carte-sugg .quoi { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #6a7484; }
+  .carte-sugg .prix { font-size: 24px; font-weight: 800; }
+  .carte-sugg.meilleure { border: 2px solid #1b7f3b; background: #f0f9f2; }
+  .carte-sugg .ou, .item .ou { font-size: 13px; color: #4a5568; }
+  .item { display: flex; align-items: baseline; padding: 6px 2px; border-bottom: 1px solid #edf0f4; cursor: pointer; }
+  .item:hover { background: #f5f7fa; }
+  .item .p { font-weight: 700; width: 64px; flex-shrink: 0; }
+  .item .d { width: 58px; flex-shrink: 0; font-size: 13px; color: #4a5568; }
+  .item.grise { color: #8a93a2; }
+  .vieux { color: #b06a00; font-size: 12px; }
+  .note { font-size: 12px; color: #6a7484; margin-top: 12px; }
+  details summary { cursor: pointer; font-size: 14px; }
+  .reglage { margin: 6px 0; font-size: 14px; }
+  /* Étiquettes de prix sur la carte */
+  .etiq-prix { background: transparent; border: none; }
+  .etiq-prix div { display: inline-block; padding: 2px 6px; border-radius: 10px; color: #fff; font-weight: 700; font-size: 13px;
+                   border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.4); white-space: nowrap; transform: translate(-50%, -50%); }
+  .etiq-prix div.meilleure { font-size: 16px; padding: 3px 8px; border-color: #1d2533; }
+  .etiq-prix div.grise { background: #8a93a2 !important; font-weight: 600; }
+  .leaflet-popup-content { font-size: 14px; }
+  .popup-table td { padding: 1px 6px 1px 0; }
+  @media (max-width: 700px) {
+    #carte { left: 0; right: 0; top: 0; bottom: 45%; }
+    #panneau { top: auto; height: 45%; width: auto; right: 0; box-shadow: 0 -2px 8px rgba(0,0,0,.15); padding: 8px 10px 16px; }
+    h1 { font-size: 16px; margin-bottom: 4px; }
+    input[type=text] { width: 150px; }
+  }
+</style>
+</head>
+<body>
+<div id="carte"></div>
+<div id="panneau">
+  <h1>Prix des carburants</h1>
+  <div class="bloc">
+    <div id="choix-carburant"></div>
+  </div>
+  <div class="bloc">
+    <div class="titre-bloc">Autour de</div>
+    <div><span id="lieu">…</span> · rayon
+      <select id="rayon"><option value="2">2 km</option><option value="5">5 km</option><option value="10">10 km</option><option value="20">20 km</option></select>
+    </div>
+  </div>
+  <div class="bloc" id="suggestions"></div>
+  <div class="bloc">
+    <div class="titre-bloc">Changer de lieu</div>
+    <div>
+      <button id="b-gps">Ma position</button><button id="b-domicile">Domicile</button><button id="b-enregistrer" title="Enregistrer le lieu actuel comme domicile">Définir comme domicile</button>
+    </div>
+    <div>
+      <input id="recherche" type="text" placeholder="Commune ou adresse"><button id="b-chercher">Chercher</button>
+    </div>
+    <div id="resultats-recherche"></div>
+    <div class="ou" style="font-size:13px">ou touchez la carte à l'endroit voulu.</div>
+  </div>
+  <div id="etat"></div>
+  <div><button id="b-actualiser">Actualiser les prix</button></div>
+  <details class="bloc" id="reglages">
+    <summary>Réglages du calcul « plein + trajet »</summary>
+    <div class="reglage">Plein de <input id="plein" type="number" min="5" max="150" step="1"> litres</div>
+    <div class="reglage">Consommation <input id="conso" type="number" min="2" max="30" step="0.5"> L/100 km</div>
+    <div class="reglage"><label><input id="vieux" type="checkbox"> Ignorer les prix non mis à jour depuis plus de 7 jours</label></div>
+  </details>
+  <div class="bloc">
+    <div class="titre-bloc" id="titre-liste">Stations</div>
+    <div id="liste"></div>
+  </div>
+  <div class="note">
+    Source : flux officiel « Prix des carburants en France » (prix-carburants.gouv.fr, publié par le ministère de l'Économie),
+    mis à jour toutes les 10 minutes environ. Le fichier ne donne pas le nom des stations, seulement leur adresse.
+    Distances à vol d'oiseau. Couleurs : du vert (moins cher) au rouge (plus cher) ; en gris, prix ancien (plus de 7 jours) ou rupture.
+  </div>
+  <input type="file" id="fichier" accept=".json,application/json" style="display:none">
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>
+(function () {
+  "use strict";
+  // ---------- Réglages ----------
+  var API = "https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/prix-des-carburants-en-france-flux-instantane-v2/exports/json";
+  var FICHIER_COMPLET = "https://www.data.gouv.fr/api/1/datasets/r/b0561905-7b5e-4f38-be50-df05708acb80"; // toute la France (~28 Mo)
+  var GEOCODAGE = "https://data.geopf.fr/geocodage/search/";
+  var DEFAUT = { lat: 50.67959, lon: 3.15661, nom: "Croix – Mairie" };
+  var CARBURANTS = [
+    { cle: "gazole", nom: "Gazole", libelle: "Gazole" },
+    { cle: "e10", nom: "E10", libelle: "SP95-E10" },
+    { cle: "sp95", nom: "SP95", libelle: "SP95" },
+    { cle: "sp98", nom: "SP98", libelle: "SP98" },
+    { cle: "e85", nom: "E85", libelle: "E85" },
+    { cle: "gplc", nom: "GPLc", libelle: "GPLc" }
+  ];
+  var JOURS_MAX = 7;          // au-delà, un prix est considéré comme ancien
+  var FACTEUR_ROUTE = 1.3;    // distance routière estimée = 1,3 × distance à vol d'oiseau
+  var ACTUALISATION_MIN = 30; // rechargement automatique des prix
+
+  // ---------- Mémoire du navigateur (facultative) ----------
+  function lire(cle, defaut) {
+    try { var v = window.localStorage.getItem("carbu." + cle); return v === null ? defaut : JSON.parse(v); }
+    catch (e) { return defaut; }
+  }
+  function ecrire(cle, v) { try { window.localStorage.setItem("carbu." + cle, JSON.stringify(v)); } catch (e) { /* rien */ } }
+
+  var etat = {
+    carb: lire("carburant", "gazole"),
+    rayon: lire("rayon", 5),
+    domicile: lire("domicile", null),
+    plein: lire("plein", 40),
+    conso: lire("conso", 7),
+    ignorerVieux: lire("ignorerVieux", true)
+  };
+  etat.pos = lire("position", null) || etat.domicile || DEFAUT;
+  var stations = [];          // stations chargées (normalisées)
+  var source = null;          // "api", "fichier" ou "local"
+  var zoneChargee = null;     // {lat, lon, rayon} couverte par les données « api »
+  var chargeA = null, chargement = false, aRefaire = false, derniereSuggestion = null;
+
+  function $(id) { return document.getElementById(id); }
+  function echapper(t) { return String(t === undefined || t === null ? "" : t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+  function deux(n) { return (n < 10 ? "0" : "") + n; }
+  function hhmm(d) { return deux(d.getHours()) + ":" + deux(d.getMinutes()); }
+  function euros(p, chiffres) { return p.toFixed(chiffres === undefined ? 3 : chiffres).replace(".", ","); }
+  function km(d) { return d < 1 ? Math.round(d * 1000) + " m" : d.toFixed(d < 10 ? 1 : 0).replace(".", ",") + " km"; }
+  function age(d) {
+    if (!d) return "date inconnue";
+    var h = (Date.now() - d.getTime()) / 3600000;
+    if (h < 1) return "il y a " + Math.max(1, Math.round(h * 60)) + " min";
+    if (h < 48) return "il y a " + Math.round(h) + " h";
+    return "il y a " + Math.round(h / 24) + " jours";
+  }
+  function distance(a, b) { // km, formule de haversine
+    var R = 6371, r = Math.PI / 180;
+    var dLat = (b.lat - a.lat) * r, dLon = (b.lon - a.lon) * r;
+    var x = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(x)));
+  }
+  function carburant(cle) { for (var i = 0; i < CARBURANTS.length; i++) if (CARBURANTS[i].cle === cle) return CARBURANTS[i]; return CARBURANTS[0]; }
+
+  // ---------- Téléchargement ----------
+  function telecharger(url, delaiMs, fin) {
+    var x = new XMLHttpRequest(), fini = false;
+    function terminer(err, texte) { if (!fini) { fini = true; fin(err, texte); } }
+    try { x.open("GET", url, true); } catch (e) { terminer("adresse refusée par le navigateur"); return; }
+    x.timeout = delaiMs;
+    x.onload = function () {
+      if (x.status >= 200 && x.status < 300) terminer(null, x.responseText);
+      else terminer("erreur " + x.status + (x.responseText ? " : " + x.responseText.substr(0, 160) : ""));
+    };
+    x.onerror = function () { terminer("connexion impossible (réseau ou accès refusé par le serveur)"); };
+    x.ontimeout = function () { terminer("pas de réponse dans le délai"); };
+    x.send();
+  }
+
+  // ---------- Lecture des données du flux officiel ----------
+  function nombre(v) {
+    if (v === null || v === undefined || v === "") return NaN;
+    return typeof v === "number" ? v : parseFloat(String(v).replace(",", "."));
+  }
+  function dateDe(v) {
+    if (!v) return null;
+    var d = new Date(String(v).replace(" ", "T"));
+    return isNaN(d.getTime()) ? null : d;
+  }
+  function enListe(v) { // « Gazole;SP98 », '["Gazole","SP98"]' ou tableau
+    if (!v) return [];
+    if (typeof v === "string") {
+      if (v.charAt(0) === "[") { try { return JSON.parse(v); } catch (e) { /* texte simple */ } }
+      return v.split(/[;,|]/);
+    }
+    return v.length !== undefined ? v : [v];
+  }
+  function contient(v, nom) {
+    var l = enListe(v);
+    for (var i = 0; i < l.length; i++) if (String(l[i]).replace(/^\s+|\s+$/g, "").toLowerCase() === nom.toLowerCase()) return true;
+    return false;
+  }
+  function prixDuChampPrix(rec) { // champ « prix » : liste [{"@nom","@valeur","@maj"}] en texte JSON
+    var p = rec.prix, res = {};
+    if (!p) return res;
+    if (typeof p === "string") { try { p = JSON.parse(p); } catch (e) { return res; } }
+    if (!(p instanceof Array)) p = [p];
+    for (var i = 0; i < p.length; i++) {
+      var q = p[i] || {}, nom = q["@nom"] || q.nom;
+      if (nom) res[String(nom).toLowerCase()] = { prix: nombre(q["@valeur"] !== undefined ? q["@valeur"] : q.valeur), maj: dateDe(q["@maj"] || q.maj) };
+    }
+    return res;
+  }
+  function normaliser(rec) {
+    if (!rec) return null;
+    if (rec.fields) rec = rec.fields; // ancien format d'API
+    var lat = NaN, lon = NaN, g = rec.geom || rec.geo_point;
+    if (g && typeof g === "object") {
+      if (g.lat !== undefined) { lat = nombre(g.lat); lon = nombre(g.lon); }
+      else if (g.coordinates) { lon = nombre(g.coordinates[0]); lat = nombre(g.coordinates[1]); }
+      else if (g.geometry && g.geometry.coordinates) { lon = nombre(g.geometry.coordinates[0]); lat = nombre(g.geometry.coordinates[1]); }
+    }
+    if (isNaN(lat) || isNaN(lon)) {
+      lat = nombre(rec.latitude); lon = nombre(rec.longitude);
+      if (Math.abs(lat) > 90) lat /= 100000;   // le flux d'origine donne les coordonnées × 100 000
+      if (Math.abs(lon) > 180) lon /= 100000;
+    }
+    if (isNaN(lat) || isNaN(lon)) return null;
+    var prix = {}, champPrix = null, i;
+    for (i = 0; i < CARBURANTS.length; i++) {
+      var c = CARBURANTS[i], v = nombre(rec[c.cle + "_prix"]), m = dateDe(rec[c.cle + "_maj"]);
+      if (isNaN(v)) {
+        if (!champPrix) champPrix = prixDuChampPrix(rec);
+        if (champPrix[c.cle]) { v = champPrix[c.cle].prix; m = champPrix[c.cle].maj; }
+      }
+      if (!isNaN(v) && v > 10) v = v / 1000;   // prix en millièmes d'euro dans certains formats
+      if (!isNaN(v) && v > 0) {
+        prix[c.cle] = { prix: v, maj: m,
+          rupture: contient(rec.carburants_rupture_temporaire, c.nom) || contient(rec.carburants_rupture_definitive, c.nom) ||
+                   contient(rec.carburants_indisponibles, c.nom) };
+      }
+    }
+    return { id: rec.id, lat: lat, lon: lon, adresse: rec.adresse || "", cp: rec.cp || "", ville: rec.ville || "",
+             nom: rec.nom || rec.enseigne || rec.name || "",
+             automate: /^(oui|1|true)$/i.test(String(rec.horaires_automate_24_24 || "")), prix: prix };
+  }
+  function analyser(texte) {
+    var d;
+    try { d = JSON.parse(texte); } catch (e) { return null; }
+    if (d && d.results) d = d.results;
+    else if (d && d.records) d = d.records;
+    if (!(d instanceof Array)) return null;
+    var res = [];
+    for (var i = 0; i < d.length; i++) { var s = normaliser(d[i]); if (s) res.push(s); }
+    return res;
+  }
+
+  // ---------- Chargement des prix ----------
+  function montrerEtat(texte, erreur) {
+    $("etat").className = erreur ? "erreur" : "";
+    $("etat").innerHTML = texte;
+  }
+  function recevoir(liste, src, zone) {
+    stations = liste; source = src; zoneChargee = zone || null; chargeA = new Date(); chargement = false;
+    afficher();
+    finCharge();
+  }
+  // Si le lieu ou le rayon a changé pendant un chargement, on recharge pour le nouveau lieu.
+  function finCharge() {
+    if (aRefaire) { aRefaire = false; if (besoinDeCharger()) charger(); else afficher(); }
+  }
+  function charger() {
+    if (chargement) { aRefaire = true; return; }
+    chargement = true;
+    var p = etat.pos, r = Math.max(etat.rayon, 5);
+    var where = "within_distance(geom, geom'POINT(" + p.lon.toFixed(5) + " " + p.lat.toFixed(5) + ")', " + r + "km)";
+    montrerEtat("Chargement des prix…");
+    telecharger(API + "?where=" + encodeURIComponent(where), 30000, function (err, texte) {
+      var liste = err ? null : analyser(texte);
+      if (liste) { recevoir(liste, "api", { lat: p.lat, lon: p.lon, rayon: r }); return; }
+      var raison = err || "réponse illisible";
+      montrerEtat("Le service de recherche par zone ne répond pas (" + echapper(raison) + ").<br>Chargement du fichier complet de la France (≈ 28 Mo), patience…");
+      telecharger(FICHIER_COMPLET, 180000, function (err2, texte2) {
+        var liste2 = err2 ? null : analyser(texte2);
+        if (liste2) { recevoir(liste2, "fichier"); return; }
+        chargement = false;
+        montrerEtat("Impossible de charger les prix.<br>Recherche par zone : " + echapper(raison) +
+          "<br>Fichier complet : " + echapper(err2 || "réponse illisible") +
+          '<br><button id="b-fichier">Ouvrir un fichier téléchargé…</button>', true);
+        $("b-fichier").onclick = function () { $("fichier").click(); };
+        afficher();
+        finCharge();
+      });
+    });
+  }
+  $("fichier").onchange = function () {
+    var f = this.files && this.files[0];
+    if (!f || !window.FileReader) return;
+    montrerEtat("Lecture du fichier " + echapper(f.name) + "…");
+    var lecteur = new FileReader();
+    lecteur.onload = function () {
+      var l = analyser(lecteur.result);
+      if (l) recevoir(l, "local"); else montrerEtat("Ce fichier n'a pas le format attendu.", true);
+    };
+    lecteur.readAsText(f);
+  };
+  // Faut-il retélécharger pour la position et le rayon actuels ?
+  function besoinDeCharger() {
+    if (source === "fichier" || source === "local") return false;
+    if (!zoneChargee) return true;
+    return distance(zoneChargee, etat.pos) + etat.rayon > zoneChargee.rayon;
+  }
+
+  // ---------- Calcul : stations, classement, suggestions ----------
+  function calculer() {
+    var c = etat.carb, res = [], i;
+    for (i = 0; i < stations.length; i++) {
+      var s = stations[i], d = distance(etat.pos, s);
+      if (d > etat.rayon) continue;
+      var o = s.prix[c];
+      if (!o) continue;
+      var vieux = o.maj ? (Date.now() - o.maj.getTime()) > JOURS_MAX * 86400000 : false;
+      var valable = !o.rupture && !(vieux && etat.ignorerVieux);
+      // Coût d'un plein + aller-retour (distance routière estimée), au prix de la station
+      var cout = o.prix * etat.plein + o.prix * etat.conso / 100 * 2 * d * FACTEUR_ROUTE;
+      res.push({ s: s, d: d, prix: o.prix, maj: o.maj, rupture: o.rupture, vieux: vieux, valable: valable, cout: cout });
+    }
+    res.sort(function (a, b) { return (b.valable - a.valable) || (a.prix - b.prix) || (a.d - b.d); });
+    var ok = [];
+    for (i = 0; i < res.length; i++) if (res[i].valable) ok.push(res[i]);
+    var moinsChere = ok[0] || null, plusProche = null, compromis = null;
+    for (i = 0; i < ok.length; i++) {
+      if (!plusProche || ok[i].d < plusProche.d) plusProche = ok[i];
+      if (!compromis || ok[i].cout < compromis.cout - 1e-9 || (Math.abs(ok[i].cout - compromis.cout) < 1e-9 && ok[i].d < compromis.d)) compromis = ok[i];
+    }
+    return { toutes: res, valables: ok, moinsChere: moinsChere, plusProche: plusProche, compromis: compromis };
+  }
+
+  // ---------- Carte ----------
+  var carte = null, calqueStations = null, marqueurPos = null, cercle = null, marqueurs = {};
+  if (window.L) {
+    carte = L.map("carte", { zoomControl: true, zoomSnap: 0.25 }).setView([etat.pos.lat, etat.pos.lon], 13);
+    var planIGN = L.tileLayer("https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2" +
+      "&STYLE=normal&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/png",
+      { maxZoom: 19, attribution: "Plan IGN © IGN – Géoplateforme" });
+    var osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+      { maxZoom: 19, attribution: "© les contributeurs d'OpenStreetMap" });
+    planIGN.addTo(carte);
+    L.control.layers({ "Plan IGN": planIGN, "OpenStreetMap": osm }, null, { position: "topright" }).addTo(carte);
+    calqueStations = L.layerGroup().addTo(carte);
+    carte.on("click", function (e) {
+      var html = '<button id="b-ici">Chercher autour d\'ici</button>';
+      L.popup().setLatLng(e.latlng).setContent(html).openOn(carte);
+      var b = $("b-ici");
+      if (b) b.onclick = function () { carte.closePopup(); choisirPosition(e.latlng.lat, e.latlng.lng, "Point choisi sur la carte"); };
+    });
+  } else {
+    $("carte").innerHTML = '<div style="padding:20px">La carte n\'a pas pu être chargée (bibliothèque Leaflet sur cdnjs.cloudflare.com inaccessible). La liste des prix reste utilisable.</div>';
+  }
+
+  function couleur(prix, min, max) {
+    var t = max > min ? (prix - min) / (max - min) : 0;
+    return "hsl(" + Math.round(130 * (1 - t)) + ",65%,36%)";
+  }
+  function popupStation(s, d) {
+    var lignes = "", i;
+    for (i = 0; i < CARBURANTS.length; i++) {
+      var c = CARBURANTS[i], o = s.prix[c.cle];
+      if (!o) continue;
+      var vieux = o.maj && (Date.now() - o.maj.getTime()) > JOURS_MAX * 86400000;
+      lignes += "<tr" + (c.cle === etat.carb ? ' style="font-weight:700"' : "") + "><td>" + c.libelle + "</td><td>" +
+        (o.rupture ? "rupture" : euros(o.prix) + " €") + '</td><td class="' + (vieux ? "vieux" : "") + '" style="font-size:12px">' + age(o.maj) + "</td></tr>";
+    }
+    var lien = "https://www.google.com/maps/dir/?api=1&destination=" + s.lat.toFixed(6) + "," + s.lon.toFixed(6);
+    return "<b>" + echapper(s.nom || s.adresse) + "</b><br>" + (s.nom ? echapper(s.adresse) + "<br>" : "") +
+      echapper(s.cp + " " + s.ville) + "<br>À " + km(d) + " (à vol d'oiseau)" + (s.automate ? " · automate 24 h/24" : "") +
+      '<table class="popup-table" style="margin-top:6px">' + lignes + "</table>" +
+      '<a href="' + lien + '" target="_blank" rel="noopener">Itinéraire</a>';
+  }
+  function dessinerCarte(r) {
+    if (!carte) return;
+    calqueStations.clearLayers();
+    marqueurs = {};
+    var min = Infinity, max = -Infinity, i;
+    for (i = 0; i < r.valables.length; i++) { min = Math.min(min, r.valables[i].prix); max = Math.max(max, r.valables[i].prix); }
+    // Les moins chères en dernier pour qu'elles passent au-dessus
+    for (i = r.toutes.length - 1; i >= 0; i--) {
+      var x = r.toutes[i], meilleure = r.moinsChere && x.s === r.moinsChere.s;
+      var classe = (meilleure ? "meilleure" : "") + (x.valable ? "" : " grise");
+      var texte = x.rupture ? "rupture" : euros(x.prix);
+      var icone = L.divIcon({ className: "etiq-prix", iconSize: [0, 0],
+        html: '<div class="' + classe + '" style="background:' + (x.valable ? couleur(x.prix, min, max) : "#8a93a2") + '">' + texte + "</div>" });
+      var m = L.marker([x.s.lat, x.s.lon], { icon: icone, zIndexOffset: meilleure ? 1000 : (x.valable ? 500 - i : 0), keyboard: false });
+      m.bindPopup(popupStation(x.s, x.d));
+      m.addTo(calqueStations);
+      marqueurs[x.s.id] = m;
+    }
+    if (marqueurPos) carte.removeLayer(marqueurPos);
+    if (cercle) carte.removeLayer(cercle);
+    cercle = L.circle([etat.pos.lat, etat.pos.lon], { radius: etat.rayon * 1000, color: "#2b6cb0", weight: 1.5, dashArray: "6 6", fill: false, interactive: false }).addTo(carte);
+    marqueurPos = L.circleMarker([etat.pos.lat, etat.pos.lon], { radius: 8, color: "#fff", weight: 3, fillColor: "#2b6cb0", fillOpacity: 1, interactive: false }).addTo(carte);
+  }
+  function montrerStation(s) {
+    if (!carte || !marqueurs[s.id]) return;
+    carte.setView([s.lat, s.lon], Math.max(carte.getZoom(), 15));
+    marqueurs[s.id].openPopup();
+  }
+
+  // ---------- Panneau ----------
+  function carteSuggestion(quoi, x, classe, complement) {
+    if (!x) return "";
+    return '<div class="carte-sugg ' + (classe || "") + '" data-id="' + echapper(x.s.id) + '"><div class="quoi">' + quoi + '</div>' +
+      '<div><span class="prix">' + euros(x.prix) + ' €</span> <span class="ou">à ' + km(x.d) + "</span></div>" +
+      '<div class="ou">' + echapper(x.s.nom ? x.s.nom + " – " : "") + echapper(x.s.adresse) + ", " + echapper(x.s.ville) +
+      ' · <span class="' + (x.vieux ? "vieux" : "") + '">prix ' + age(x.maj) + "</span></div>" + (complement || "") + "</div>";
+  }
+  function afficher() {
+    var c = carburant(etat.carb), r = calculer(), html = "", i;
+    derniereSuggestion = r;
+    // Boutons et champs
+    var boutons = "";
+    for (i = 0; i < CARBURANTS.length; i++)
+      boutons += '<button data-carb="' + CARBURANTS[i].cle + '"' + (CARBURANTS[i].cle === etat.carb ? ' class="actif"' : "") + ">" + CARBURANTS[i].libelle + "</button>";
+    $("choix-carburant").innerHTML = boutons;
+    $("lieu").textContent = etat.pos.nom;
+    $("rayon").value = String(etat.rayon);
+    $("b-domicile").disabled = !etat.domicile;
+    // État du chargement
+    if (chargeA && !chargement) {
+      var sources = { api: "service officiel, recherche par zone", fichier: "fichier complet de la France", local: "fichier ouvert depuis l'ordinateur" };
+      montrerEtat("Prix chargés à " + hhmm(chargeA) + " (" + sources[source] + ") · " + r.toutes.length + " station" + (r.toutes.length > 1 ? "s" : "") +
+        " avec du " + c.libelle + " dans un rayon de " + etat.rayon + " km");
+    }
+    // Suggestions
+    if (r.moinsChere) {
+      var surcout = r.plusProche && r.plusProche !== r.moinsChere ?
+        '<div class="ou">Soit ' + euros((r.plusProche.prix - r.moinsChere.prix) * etat.plein, 2) + " € de moins qu'à la plus proche pour " + etat.plein + " L</div>" : "";
+      html += carteSuggestion("La moins chère", r.moinsChere, "meilleure", surcout);
+      if (r.plusProche && r.plusProche !== r.moinsChere) html += carteSuggestion("La plus proche", r.plusProche);
+      if (r.compromis && r.compromis !== r.moinsChere && r.compromis !== r.plusProche)
+        html += carteSuggestion("Meilleur compromis plein + trajet", r.compromis, "",
+          '<div class="ou">Plein de ' + etat.plein + " L + aller-retour ≈ " + euros(r.compromis.cout, 2) + " € (estimation)</div>");
+      else if (r.compromis)
+        html += '<div class="ou" style="font-size:13px">En comptant un plein de ' + etat.plein + " L et l'aller-retour, la meilleure reste la " +
+          (r.compromis === r.moinsChere ? "moins chère" : "plus proche") + ".</div>";
+    } else if (chargeA) {
+      html = '<div class="ou">Aucune station avec du ' + c.libelle + " à prix récent dans ce rayon. Essayez un rayon plus grand.</div>";
+    }
+    $("suggestions").innerHTML = html;
+    // Liste complète
+    $("titre-liste").textContent = c.libelle + " : stations du moins cher au plus cher";
+    var liste = "";
+    for (i = 0; i < r.toutes.length && i < 60; i++) {
+      var x = r.toutes[i];
+      liste += '<div class="item' + (x.valable ? "" : " grise") + '" data-id="' + echapper(x.s.id) + '"><span class="p">' +
+        (x.rupture ? "rupture" : euros(x.prix)) + '</span><span class="d">' + km(x.d) + '</span><span class="ou">' +
+        echapper(x.s.adresse) + ", " + echapper(x.s.ville) + (x.vieux ? ' <span class="vieux">(prix ' + age(x.maj) + ")</span>" : "") + "</span></div>";
+    }
+    $("liste").innerHTML = liste;
+    dessinerCarte(r);
+  }
+  function stationParId(id) { for (var i = 0; i < stations.length; i++) if (String(stations[i].id) === id) return stations[i]; return null; }
+  $("panneau").onclick = function (ev) {
+    var t = ev.target;
+    while (t && t !== this) {
+      if (t.getAttribute && t.getAttribute("data-carb")) { choisirCarburant(t.getAttribute("data-carb")); return; }
+      if (t.getAttribute && t.getAttribute("data-id")) { var s = stationParId(t.getAttribute("data-id")); if (s) montrerStation(s); return; }
+      t = t.parentNode;
+    }
+  };
+
+  // ---------- Actions ----------
+  function choisirCarburant(cle) { etat.carb = cle; ecrire("carburant", cle); afficher(); }
+  function recadrer() { if (carte) carte.fitBounds(L.latLng(etat.pos.lat, etat.pos.lon).toBounds(etat.rayon * 2000), { padding: [10, 10] }); }
+  function choisirPosition(lat, lon, nom) {
+    etat.pos = { lat: lat, lon: lon, nom: nom };
+    ecrire("position", etat.pos);
+    recadrer();
+    if (besoinDeCharger()) charger(); else afficher();
+  }
+  $("rayon").onchange = function () {
+    etat.rayon = +this.value; ecrire("rayon", etat.rayon);
+    recadrer();
+    if (besoinDeCharger()) charger(); else afficher();
+  };
+  $("b-actualiser").onclick = function () { zoneChargee = null; if (source === "fichier") source = null; charger(); };
+  $("b-domicile").onclick = function () { if (etat.domicile) choisirPosition(etat.domicile.lat, etat.domicile.lon, etat.domicile.nom); };
+  $("b-enregistrer").onclick = function () {
+    etat.domicile = { lat: etat.pos.lat, lon: etat.pos.lon, nom: "Domicile (" + etat.pos.nom + ")" };
+    if (/^Domicile/.test(etat.pos.nom)) etat.domicile.nom = etat.pos.nom;
+    ecrire("domicile", etat.domicile);
+    afficher();
+    montrerEtat("Domicile enregistré dans ce navigateur.");
+  };
+  $("b-gps").onclick = function () {
+    if (!navigator.geolocation || window.isSecureContext === false) {
+      montrerEtat("La localisation n'est pas disponible ici : les navigateurs ne l'autorisent que sur une page en https " +
+        "(ou ouverte depuis un fichier). Cherchez une commune ou touchez la carte.", true);
+      return;
+    }
+    montrerEtat("Recherche de votre position…");
+    navigator.geolocation.getCurrentPosition(function (p) {
+      choisirPosition(p.coords.latitude, p.coords.longitude, "Ma position (à " + Math.round(p.coords.accuracy) + " m près)");
+    }, function (e) {
+      montrerEtat("Position introuvable (" + echapper(e.message || ("code " + e.code)) + "). Cherchez une commune ou touchez la carte.", true);
+    }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+  };
+  function chercher() {
+    var q = $("recherche").value.replace(/^\s+|\s+$/g, "");
+    if (q.length < 3) return;
+    $("resultats-recherche").innerHTML = '<div class="ou">Recherche…</div>';
+    telecharger(GEOCODAGE + "?q=" + encodeURIComponent(q) + "&limit=5", 15000, function (err, texte) {
+      var res = null;
+      if (!err) { try { res = JSON.parse(texte).features; } catch (e) { res = null; } }
+      if (!res || !res.length) {
+        $("resultats-recherche").innerHTML = '<div class="ou">' + (err ? "Recherche indisponible (" + echapper(err) + ")." : "Aucun résultat.") +
+          " Vous pouvez aussi toucher la carte à l'endroit voulu.</div>";
+        return;
+      }
+      var h = "";
+      for (var i = 0; i < res.length; i++) {
+        var f = res[i], co = f.geometry && f.geometry.coordinates, pr = f.properties || {};
+        if (!co) continue;
+        h += '<button data-lat="' + co[1] + '" data-lon="' + co[0] + '" data-nom="' + echapper(pr.label || pr.name || q) + '">' +
+          echapper(pr.label || pr.name || q) + (pr.context ? ' <span class="ou">(' + echapper(pr.context) + ")</span>" : "") + "</button>";
+      }
+      $("resultats-recherche").innerHTML = h;
+    });
+  }
+  $("b-chercher").onclick = chercher;
+  $("recherche").onkeydown = function (e) { if (e.key === "Enter" || e.keyCode === 13) chercher(); };
+  $("resultats-recherche").onclick = function (ev) {
+    var t = ev.target;
+    while (t && t !== this && !(t.getAttribute && t.getAttribute("data-lat"))) t = t.parentNode;
+    if (!t || t === this) return;
+    this.innerHTML = "";
+    choisirPosition(+t.getAttribute("data-lat"), +t.getAttribute("data-lon"), t.getAttribute("data-nom"));
+  };
+  // Réglages du calcul
+  $("plein").value = etat.plein; $("conso").value = etat.conso; $("vieux").checked = etat.ignorerVieux;
+  $("plein").onchange = function () { var v = nombre(this.value); if (v > 0) { etat.plein = v; ecrire("plein", v); afficher(); } };
+  $("conso").onchange = function () { var v = nombre(this.value); if (v > 0) { etat.conso = v; ecrire("conso", v); afficher(); } };
+  $("vieux").onchange = function () { etat.ignorerVieux = this.checked; ecrire("ignorerVieux", etat.ignorerVieux); afficher(); };
+
+  // Pour les tests
+  window.CARBU = {
+    resultat: function () { return derniereSuggestion; },
+    position: function (lat, lon, nom) { choisirPosition(lat, lon, nom || "test"); },
+    carburant: choisirCarburant,
+    rayon: function (r) { $("rayon").value = String(r); $("rayon").onchange(); },
+    etat: etat,
+    stations: function () { return stations; }
+  };
+
+  recadrer();
+  afficher();
+  charger();
+  setInterval(function () { if (source === "api") { zoneChargee = null; charger(); } }, ACTUALISATION_MIN * 60000);
+})();
+</script>
+</body>
+</html>
