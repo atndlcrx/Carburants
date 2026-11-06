@@ -25,7 +25,8 @@
   #lieu { font-weight: 600; }
   #resultats-recherche button { display: block; width: 100%; text-align: left; margin: 3px 0; }
   #etat { font-size: 13px; color: #4a5568; }
-  #etat.erreur { color: #b3261e; }
+  #etat.erreur, #message-lieu.erreur { color: #b3261e; }
+  #message-lieu { font-size: 13px; margin: 2px 0; }
   .carte-sugg { border: 1px solid #d7dde5; border-radius: 8px; padding: 8px 10px; margin: 6px 0; cursor: pointer; }
   .carte-sugg:hover { background: #f5f7fa; }
   .carte-sugg .quoi { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #6a7484; }
@@ -79,6 +80,7 @@
     <div>
       <input id="recherche" type="text" placeholder="Commune ou adresse"><button id="b-chercher">Chercher</button>
     </div>
+    <div id="message-lieu"></div>
     <div id="resultats-recherche"></div>
     <div class="ou" style="font-size:13px">ou touchez la carte à l'endroit voulu.</div>
   </div>
@@ -283,7 +285,7 @@
     stations = liste; source = src; zoneChargee = zone || null; chargeA = new Date(); chargement = false;
     associer();
     afficher();
-    if (besoinOsm()) chargerEnseignes(0);
+    if (besoinOsm() && !osm.enCours) chargerEnseignes(false);
     finCharge();
   }
 
@@ -292,44 +294,87 @@
   function hote(url) { return url.split("/")[2]; }
   function chiffres(v) { return String(v === undefined || v === null ? "" : v).replace(/\D/g, ""); }
   function besoinOsm() { return !osm.zone || distance(osm.zone, etat.pos) + etat.rayon > osm.zone.rayon; }
-  function chargerEnseignes(essai) {
+  // Les enseignes changent rarement : on les garde 7 jours dans le navigateur (4 zones au plus).
+  var MEMOIRE_JOURS = 7;
+  function zoneEnMemoire() {
+    var m = lire("osm", []), i;
+    if (!(m instanceof Array)) return null;
+    for (i = 0; i < m.length; i++) {
+      var z = m[i];
+      if (z && z.elements && Date.now() - z.t < MEMOIRE_JOURS * 86400000 && distance(z, etat.pos) + etat.rayon <= z.rayon) return z;
+    }
+    return null;
+  }
+  function memoriser(z) {
+    var m = lire("osm", []);
+    if (!(m instanceof Array)) m = [];
+    m.unshift(z);
+    ecrire("osm", m.slice(0, 4));
+  }
+  // Interroge OpenStreetMap. Si un serveur échoue, le suivant est essayé aussitôt ; s'il est lent (8 s sans
+  // réponse), le suivant est interrogé en parallèle et la première réponse valable l'emporte.
+  function chargerEnseignes(forcer) {
     if (osm.enCours) { osm.aRefaire = true; return; }
-    var p = etat.pos, r = Math.max(etat.rayon, 5) + 0.5;
+    if (!forcer) {
+      var z = zoneEnMemoire();
+      if (z) {
+        osm.elements = z.elements; osm.zone = { lat: z.lat, lon: z.lon, rayon: z.rayon }; osm.cadre = z.cadre;
+        osm.erreur = null; osm.recus = z.elements.length;
+        osm.serveur = "mémoire du navigateur, données du " + new Date(z.t).toLocaleDateString("fr-FR");
+        associer(); afficher();
+        return;
+      }
+    }
+    var p = etat.pos, r = Math.max(etat.rayon, 10) + 2;  // zone large : pas de nouvelle recherche à chaque déplacement
     var dLat = r / 111.32, dLon = r / (111.32 * Math.cos(p.lat * Math.PI / 180));
     var cadre = [p.lat - dLat, p.lon - dLon, p.lat + dLat, p.lon + dLon].map(function (v) { return v.toFixed(5); }).join(",");
     var requete = '[out:json][timeout:25];nwr["amenity"="fuel"](' + cadre + ");out tags center;";
-    osm.enCours = true; osm.essai = essai;
-    if (essai === 0) osm.erreurs = [];
-    telecharger(OVERPASS[essai] + "?data=" + encodeURIComponent(requete), 40000, function (err, texte) {
+    var fini = false, enVol = 0, prochain = 0;
+    osm.enCours = true; osm.erreurs = []; osm.lances = 0;
+    function terminer() {
       osm.enCours = false;
-      var els = null, rep = null;
-      if (!err) { try { rep = JSON.parse(texte); } catch (e) { err = "réponse illisible"; } }
-      if (rep) {
-        if (rep.remark && /error|timed out|timeout|memory/i.test(rep.remark)) err = "serveur surchargé";
-        else if (rep.elements instanceof Array) els = rep.elements;
-        else err = "réponse inattendue";
-      }
-      if (!els) osm.erreurs.push(hote(OVERPASS[essai]) + " : " + String(err).substr(0, 70));
-      // Serveur suivant (on montre l'avancement en attendant)
-      if (!els && essai + 1 < OVERPASS.length && !osm.aRefaire) { chargerEnseignes(essai + 1); afficher(); return; }
-      if (els) {
-        osm.elements = [];
-        for (var i = 0; i < els.length; i++) {
-          var e = els[i], t = e.tags || {}, c = e.center || e;
-          if (c.lat === undefined) continue;
-          var refs = String(t["ref:FR:prix-carburants"] || "").split(";"), lr = [];
-          for (var j = 0; j < refs.length; j++) if (chiffres(refs[j])) lr.push(chiffres(refs[j]));
-          osm.elements.push({ lat: +c.lat, lon: +c.lon, nom: t.brand || t.name || t.operator || "", refs: lr });
-        }
-        osm.zone = { lat: p.lat, lon: p.lon, rayon: r }; osm.erreur = null;
-        osm.serveur = hote(OVERPASS[essai]); osm.recus = osm.elements.length;
-      } else if (!osm.aRefaire) {
-        osm.erreur = osm.erreurs.join(" ; ");
-      }
       associer();
       afficher();
-      if (osm.aRefaire) { osm.aRefaire = false; if (besoinOsm()) chargerEnseignes(0); }
-    });
+      if (osm.aRefaire) { osm.aRefaire = false; if (besoinOsm()) chargerEnseignes(false); }
+    }
+    function lancer() {
+      if (fini || prochain >= OVERPASS.length) return;
+      var i = prochain++;
+      enVol++; osm.lances = prochain;
+      var relance = setTimeout(lancer, 8000);
+      telecharger(OVERPASS[i] + "?data=" + encodeURIComponent(requete), 30000, function (err, texte) {
+        clearTimeout(relance); enVol--;
+        if (fini) return;
+        var els = null, rep = null;
+        if (!err) { try { rep = JSON.parse(texte); } catch (e) { err = "réponse illisible"; } }
+        if (rep) {
+          if (rep.remark && /error|timed out|timeout|memory/i.test(rep.remark)) err = "serveur surchargé";
+          else if (rep.elements instanceof Array) els = rep.elements;
+          else err = "réponse inattendue";
+        }
+        if (els) {
+          fini = true;
+          osm.elements = [];
+          for (var k = 0; k < els.length; k++) {
+            var e = els[k], t = e.tags || {}, c = e.center || e;
+            if (c.lat === undefined) continue;
+            var refs = String(t["ref:FR:prix-carburants"] || "").split(";"), lr = [];
+            for (var j = 0; j < refs.length; j++) if (chiffres(refs[j])) lr.push(chiffres(refs[j]));
+            osm.elements.push({ lat: +c.lat, lon: +c.lon, nom: t.brand || t.name || t.operator || "", refs: lr });
+          }
+          osm.zone = { lat: p.lat, lon: p.lon, rayon: r }; osm.erreur = null; osm.cadre = cadre;
+          osm.serveur = hote(OVERPASS[i]); osm.recus = osm.elements.length;
+          memoriser({ lat: p.lat, lon: p.lon, rayon: r, t: Date.now(), cadre: cadre, elements: osm.elements });
+          terminer();
+          return;
+        }
+        osm.erreurs.push(hote(OVERPASS[i]) + " : " + String(err).substr(0, 70));
+        if (prochain < OVERPASS.length) { lancer(); }
+        else if (enVol === 0) { fini = true; osm.erreur = osm.erreurs.join(" ; "); terminer(); }
+      });
+      afficher();  // montre la recherche en cours
+    }
+    lancer();
   }
   // Lien direct (identifiant officiel noté dans OSM), sinon station OSM sans autre lien à moins de 50 m.
   function associer() {
@@ -359,6 +404,7 @@
     if (aRefaire) { aRefaire = false; if (besoinDeCharger()) charger(); else afficher(); }
   }
   function charger() {
+    if (besoinOsm() && !osm.enCours) chargerEnseignes(false);  // en parallèle des prix
     if (chargement) { aRefaire = true; return; }
     chargement = true;
     var p = etat.pos, r = Math.max(etat.rayon, 5);
@@ -434,6 +480,12 @@
       { maxZoom: 19, attribution: "Plan IGN © IGN – Géoplateforme" });
     var fondOsm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
       { maxZoom: 19, attribution: "© les contributeurs d'OpenStreetMap" });
+    planIGN.on("tileerror", function (e) {
+      var t = e.tile, n = (t.essais || 0) + 1, base = String(t.src).replace(/&essai=\d+$/, "");
+      t.essais = n;
+      if (n <= 2) setTimeout(function () { t.src = base + "&essai=" + n; }, 1500 * n);
+      else if (n === 3) t.src = "https://tile.openstreetmap.org/" + e.coords.z + "/" + e.coords.x + "/" + e.coords.y + ".png";
+    });
     planIGN.addTo(carte);
     L.control.layers({ "Plan IGN": planIGN, "OpenStreetMap": fondOsm }, null, { position: "topright" }).addTo(carte);
     calqueStations = L.layerGroup().addTo(carte);
@@ -526,15 +578,16 @@
         if (r.toutes[i].s.lienEnseigne === "direct") nbDirect++;
         else if (r.toutes[i].s.lienEnseigne === "position") nbPosition++;
       }
-      if (osm.enCours) ligneEns = "Enseignes : recherche sur OpenStreetMap (serveur " + (osm.essai + 1) + " sur " + OVERPASS.length + ")…";
+      if (osm.enCours) ligneEns = "Enseignes : recherche sur OpenStreetMap" + (osm.lances > 1 ? " (" + osm.lances + " serveurs interrogés)" : "") +
+        "… Elles seront ensuite gardées 7 jours dans ce navigateur.";
       else if (osm.zone) ligneEns = "Enseigne connue pour " + (nbDirect + nbPosition) + " station" + (nbDirect + nbPosition > 1 ? "s" : "") + " sur " + r.toutes.length +
         " (OpenStreetMap, serveur " + osm.serveur + " : " + osm.recus + " stations-service reçues ; " + nbDirect + " reliée" + (nbDirect > 1 ? "s" : "") +
         " par leur numéro officiel, " + nbPosition + " par la position)";
       else if (osm.erreur) ligneEns = "Enseignes indisponibles. " + echapper(osm.erreur) + ' <button id="b-enseignes">Réessayer</button>';
-      else ligneEns = "Enseignes : en attente…";
+      else ligneEns = "";
       montrerEtat("Prix chargés à " + hhmm(chargeA) + " (" + sources[source] + ") · " + r.toutes.length + " station" + (r.toutes.length > 1 ? "s" : "") +
         " avec du " + c.libelle + " dans un rayon de " + etat.rayon + " km<br>" + ligneEns);
-      if ($("b-enseignes")) $("b-enseignes").onclick = function (ev) { ev.stopPropagation(); osm.erreur = null; chargerEnseignes(0); afficher(); };
+      if ($("b-enseignes")) $("b-enseignes").onclick = function (ev) { ev.stopPropagation(); osm.erreur = null; chargerEnseignes(true); };
     }
     // Suggestions
     if (r.moinsChere) {
@@ -581,12 +634,12 @@
     etat.pos = { lat: lat, lon: lon, nom: nom };
     ecrire("position", etat.pos);
     recadrer();
-    if (besoinDeCharger()) charger(); else { afficher(); if (besoinOsm()) chargerEnseignes(0); }
+    if (besoinDeCharger()) charger(); else { afficher(); if (besoinOsm()) chargerEnseignes(false); }
   }
   $("rayon").onchange = function () {
     etat.rayon = +this.value; ecrire("rayon", etat.rayon);
     recadrer();
-    if (besoinDeCharger()) charger(); else { afficher(); if (besoinOsm()) chargerEnseignes(0); }
+    if (besoinDeCharger()) charger(); else { afficher(); if (besoinOsm()) chargerEnseignes(false); }
   };
   $("b-actualiser").onclick = function () { zoneChargee = null; if (source === "fichier") source = null; charger(); };
   $("b-domicile").onclick = function () { if (etat.domicile) choisirPosition(etat.domicile.lat, etat.domicile.lon, etat.domicile.nom); };
@@ -597,17 +650,23 @@
     afficher();
     montrerEtat("Domicile enregistré dans ce navigateur.");
   };
+  function messageLieu(texte, erreur) { $("message-lieu").className = erreur ? "erreur" : ""; $("message-lieu").innerHTML = texte; }
   $("b-gps").onclick = function () {
+    var adresse = location.protocol === "https:" ? "" :
+      " La page est ouverte par une adresse « " + echapper(location.protocol.replace(":", "")) + " » et non « https » : les navigateurs " +
+      "refusent souvent la position dans ce cas (toujours en « http », et sur téléphone pour un fichier), même si Chrome a l'autorisation.";
     if (!navigator.geolocation || window.isSecureContext === false) {
-      montrerEtat("La localisation n'est pas disponible ici : les navigateurs ne l'autorisent que sur une page en https " +
-        "(ou ouverte depuis un fichier). Cherchez une commune ou touchez la carte.", true);
+      messageLieu("Localisation impossible ici." + adresse + " Cherchez une commune ou touchez la carte.", true);
       return;
     }
-    montrerEtat("Recherche de votre position…");
+    messageLieu("Recherche de votre position…");
     navigator.geolocation.getCurrentPosition(function (p) {
+      messageLieu("");
       choisirPosition(p.coords.latitude, p.coords.longitude, "Ma position (à " + Math.round(p.coords.accuracy) + " m près)");
     }, function (e) {
-      montrerEtat("Position introuvable (" + echapper(e.message || ("code " + e.code)) + "). Cherchez une commune ou touchez la carte.", true);
+      var raisons = { 1: "accès refusé", 2: "position indisponible", 3: "délai dépassé" };
+      messageLieu("Position introuvable : " + (raisons[e.code] || "erreur") + " (" + echapper(e.message || "") + ")." + adresse +
+        " Cherchez une commune ou touchez la carte.", true);
     }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
   };
   function chercher() {
@@ -654,7 +713,8 @@
     carburant: choisirCarburant,
     rayon: function (r) { $("rayon").value = String(r); $("rayon").onchange(); },
     etat: etat,
-    stations: function () { return stations; }
+    stations: function () { return stations; },
+    osm: function () { return osm; }
   };
 
   recadrer();
